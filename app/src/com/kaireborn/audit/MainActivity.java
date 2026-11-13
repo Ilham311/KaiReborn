@@ -1,10 +1,11 @@
 package com.kaireborn.audit;
 
 import android.app.Activity;
-import android.content.SharedPreferences;
+import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
@@ -13,29 +14,27 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import java.io.BufferedReader;
-import java.io.File;
 import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
- * KaiReborn — device-audit companion.
+ * KaiReborn — full-feature companion, the honest descendant of XKatrina.
  *
- * Design notes, deliberately different from the legacy app:
+ * Every screen maps 1:1 to something the legacy app did, but each action goes
+ * through the module CLI (`kai`), which:
+ *   - defaults to dry-run,
+ *   - requires module mode "full" before writing,
+ *   - logs every path it touches,
+ *   - refuses critical packages.
  *
- *  - It never calls `pm clear`, `rm` under /data/system, `mount -o remount`,
- *    or writes a module hook. Its only write paths are:
- *      (a) the module's state/extra.prop, and
- *      (b) a read-only report in the module's logs/ directory.
- *  - No AdvertisingIdClient. The legacy app read the GAID and stored it in a
- *    backup JSON; that is a privacy leak in the opposite direction and buys
- *    nothing, because the GAID lives in Play Services and cannot be spoofed by
- *    an ordinary app.
- *  - No network. Nothing leaves the device.
- *  - The ID view is read-only by construction: it reads settings_ssaid.xml and
- *    GMS's adid_settings.xml and prints the values. Reset is a button that
- *    delegates to the platform's own mechanism, not to file surgery.
+ * Intentionally absent, with the audit reason (docs/EVIDENCE.md):
+ *   - global cache / empty-dir purge   : 1643 dirs deleted on the audit device
+ *   - /data/system/users/0 file wipe   : 19 settings & package files
+ *   - remount / or /vendor read-write  : dm-* devices, both read-only
+ *   - openrecoveryscript + reboot      : A/B device, no recovery partition
+ *   - Advertising ID write             : lives in GMS, not writable by an app
+ *   - IMEI / serial spoofing           : not readable by an app since Android 10
+ *
+ * The app has no network permission, so no identifier can leave the device.
  */
 public class MainActivity extends Activity {
 
@@ -43,8 +42,7 @@ public class MainActivity extends Activity {
 
     private TextView status;
     private TextView output;
-    private EditText name;
-    private EditText value;
+    private EditText pkg;
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     @Override
@@ -53,50 +51,12 @@ public class MainActivity extends Activity {
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        int pad = dp(12);
+        int pad = dp(10);
         root.setPadding(pad, pad, pad, pad);
 
         status = new TextView(this);
+        status.setTextSize(12);
         status.setText("checking…");
-        status.setTextSize(13);
-
-        Button audit = new Button(this);
-        audit.setText("Run read-only audit");
-        audit.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) { runAudit(); }
-        });
-
-        Button idBtn = new Button(this);
-        idBtn.setText("Show identifiers (read-only)");
-        idBtn.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) { showIds(); }
-        });
-
-        Button addBtn = new Button(this);
-        addBtn.setText("Add property override");
-        addBtn.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) { addOverride(); }
-        });
-
-        name = new EditText(this);
-        name.setHint("property name, e.g. ro.product.model");
-        name.setTextSize(13);
-        value = new EditText(this);
-        value.setHint("value");
-        value.setTextSize(13);
-
-        Button resetGaia = new Button(this);
-        resetGaia.setText("Open system Ad-ID settings");
-        resetGaia.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) {
-                try {
-                    startActivity(new android.content.Intent(
-                            android.provider.Settings.ACTION_PRIVACY_SETTINGS));
-                } catch (Exception e) {
-                    append("cannot open settings: " + e.getMessage());
-                }
-            }
-        });
 
         output = new TextView(this);
         output.setTextSize(11);
@@ -105,52 +65,114 @@ public class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         scroll.addView(output);
 
+        // ---- read-only -----------------------------------------------------
+        root.addView(section("Read-only"));
+        root.addView(btn("Audit build properties", "kai audit"));
+        root.addView(btn("Show identifiers", null));
+        root.addView(btn("Write audit snapshot to log", "kai audit"));
+
+        // ---- identity profile ----------------------------------------------
+        root.addView(section("Identity profile"));
+        root.addView(btn("List profiles", "kai profile list"));
+        root.addView(btn("Create profile from this device", "kai profile create device"));
+        root.addView(btn("Apply profile · dry run", "kai profile apply device"));
+        root.addView(btn("Apply profile · REAL", "kai mode full; kai profile apply device --apply"));
+
+        // ---- wipe / reset ---------------------------------------------------
+        root.addView(section("Wipe & reset (dry run first)"));
+        root.addView(btn("Wipe Google data", "kai wipegms"));
+        root.addView(btn("Wipe Google data + GMS", "kai wipegms --with-gms"));
+        root.addView(btn("Reset Android ID", "kai ssaid"));
+        root.addView(btn("Reset Android ID · REAL", "kai mode full; kai ssaid --apply"));
+        root.addView(btn("Clear IFW rules", "kai ifw"));
+        root.addView(btn("Recompile ART", "kai dalvik"));
+
+        // ---- per app --------------------------------------------------------
+        root.addView(section("Per app"));
+        pkg = new EditText(this);
+        pkg.setHint("package, e.g. com.example.app");
+        pkg.setTextSize(13);
+        root.addView(pkg);
+        root.addView(btn("Clear app data", null));
+        root.addView(btn("Reinstall via Play Store slot", null));
+        root.addView(btn("Clear app cache", null));
+
+        // ---- module ---------------------------------------------------------
+        root.addView(section("Module control"));
+        root.addView(btn("Mode: safe", "kai mode safe"));
+        root.addView(btn("Mode: full — enables writes", "kai mode full"));
+        root.addView(btn("Mode: audit — observe only", "kai mode audit"));
+        root.addView(btn("Open system Ad-ID settings", null));
+
         root.addView(status);
-        root.addView(audit);
-        root.addView(idBtn);
-        root.addView(name);
-        root.addView(value);
-        root.addView(addBtn);
-        root.addView(resetGaia);
         root.addView(scroll, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
-
         setContentView(root);
+
         refreshStatus();
     }
+
+    // --- view helpers -------------------------------------------------------
 
     private int dp(int v) {
         return (int) (v * getResources().getDisplayMetrics().density);
     }
 
-    private void append(String s) {
-        output.append(s + "\n");
+    private TextView section(String t) {
+        TextView v = new TextView(this);
+        v.setText(t.toUpperCase());
+        v.setTextSize(11);
+        v.setPadding(0, dp(12), 0, dp(2));
+        return v;
     }
 
-    private void refreshStatus() {
-        new Thread(new Runnable() {
-            public void run() {
-                final boolean hasRoot = rootOk();
-                final boolean hasModule = new File(MOD, "module.prop").exists();
-                final String impl = sh("cat " + MOD + "/state/mode 2>/dev/null").trim();
-                ui.post(new Runnable() {
-                    public void run() {
-                        status.setText("root: " + (hasRoot ? "yes" : "no")
-                                + "   module: " + (hasModule ? "installed" : "missing")
-                                + "   mode: " + (impl.isEmpty() ? "?" : impl));
-                    }
-                });
+    private Button btn(String label, final String cmd) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setAllCaps(false);
+        b.setTextSize(13);
+        b.setTag(cmd == null ? "" : cmd);
+        b.setOnClickListener(click);
+        return b;
+    }
+
+    private final View.OnClickListener click = new View.OnClickListener() {
+        public void onClick(View v) {
+            String cmd = String.valueOf(v.getTag());
+            if (cmd == null || cmd.isEmpty() || "null".equals(cmd)) {
+                handleSpecial(v);
+            } else {
+                run(cmd);
             }
-        }).start();
+        }
+    };
+
+    private void handleSpecial(View v) {
+        Button b = (Button) v;
+        String label = String.valueOf(b.getText());
+        if (label.startsWith("Show identifiers")) {
+            showIdentifiers();
+        } else if (label.startsWith("Clear app data")) {
+            run("kai pkgreset " + pkgText());
+        } else if (label.startsWith("Reinstall")) {
+            run("kai pkgreinstall " + pkgText());
+        } else if (label.startsWith("Clear app cache")) {
+            run("kai cleaner " + pkgText());
+        } else if (label.startsWith("Open system Ad-ID")) {
+            try {
+                startActivity(new Intent(Settings.ACTION_PRIVACY_SETTINGS));
+            } catch (Exception e) {
+                append("cannot open settings: " + e.getMessage());
+            }
+        }
+    }
+
+    private String pkgText() {
+        return pkg.getText().toString().trim();
     }
 
     // --- root plumbing ------------------------------------------------------
 
-    private boolean rootOk() {
-        return sh("id").contains("uid=0");
-    }
-
-    /** Runs through `su -c`, the same primitive the legacy app used. */
     private String sh(String cmd) {
         StringBuilder sb = new StringBuilder();
         Process p = null;
@@ -168,41 +190,38 @@ public class MainActivity extends Activity {
         return sb.toString();
     }
 
-    // --- read-only screens --------------------------------------------------
+    private void append(String s) {
+        output.append(s + "\n");
+    }
 
-    private void runAudit() {
+    private void run(final String cmd) {
         output.setText("");
-        append("── audit ──");
+        append("$ kai " + cmd.replaceFirst("^kai\\s+", ""));
         new Thread(new Runnable() {
             public void run() {
-                final String out = sh("sh " + MOD + "/audit.sh");
+                String c = cmd.replaceFirst("^kai\\s+", "");
+                final String out = sh("sh " + MOD + "/kai " + c + " 2>&1");
                 ui.post(new Runnable() {
                     public void run() {
-                        append(out.isEmpty() ? "(no output — module not installed?)" : out);
+                        append(out.isEmpty() ? "(no output)" : out);
+                        refreshStatus();
                     }
                 });
             }
         }).start();
     }
 
-    /**
-     * Reads identifiers without changing them.
-     *
-     * settings_ssaid.xml is Android Binary XML; we do not parse it, we only
-     * report that it exists and how many entries it holds, because parsing
-     * formats is exactly where the legacy app got the semantics wrong.
-     */
-    private void showIds() {
+    /** Read-only identifier report. Never edits anything. */
+    private void showIdentifiers() {
         output.setText("");
         append("── identifiers (read-only) ──");
         new Thread(new Runnable() {
             public void run() {
                 StringBuilder sb = new StringBuilder();
-
                 String adid = sh("cat /data/user/0/com.google.android.gms/shared_prefs/adid_settings.xml 2>/dev/null");
-                sb.append("Advertising ID file:\n");
+                sb.append("Advertising ID (owned by Play Services, not writable):\n");
                 if (adid.trim().isEmpty()) {
-                    sb.append("  (not present — Play Services has no GAID yet)\n");
+                    sb.append("  no GAID yet\n");
                 } else {
                     for (String l : adid.split("\n")) {
                         String t = l.trim();
@@ -210,27 +229,17 @@ public class MainActivity extends Activity {
                             sb.append("  ").append(t).append('\n');
                     }
                 }
-
-                String ssaid = sh("ls -l /data/system/users/0/settings_ssaid.xml 2>/dev/null");
-                sb.append("\nAndroid ID (SSAID) store:\n");
-                sb.append("  ").append(ssaid.trim().isEmpty() ? "missing" : ssaid.trim()).append('\n');
-                sb.append("  entries: ")
-                  .append(sh("grep -c 'com\\.' /data/system/users/0/settings_ssaid.xml 2>/dev/null").trim())
-                  .append('\n');
-                sb.append("  note: values are per-app and regenerated by the platform\n");
-                sb.append("        when the store is removed. This app never edits them.\n");
+                sb.append("\nAndroid ID (per-app, regenerable only):\n");
+                sb.append("  store: ").append(sh("ls -l /data/system/users/0/settings_ssaid.xml 2>/dev/null").trim()).append('\n');
+                sb.append("  apps:  ").append(sh("grep -c 'com\\.' /data/system/users/0/settings_ssaid.xml 2>/dev/null").trim()).append('\n');
 
                 sb.append("\nBuild identity:\n");
-                String[] props = {
-                        "ro.product.manufacturer", "ro.product.model", "ro.product.brand",
+                String[] props = {"ro.product.manufacturer", "ro.product.model", "ro.product.brand",
                         "ro.product.device", "ro.build.fingerprint", "ro.build.version.release",
-                        "ro.build.version.sdk", "ro.build.tags", "ro.build.type"
-                };
+                        "ro.build.version.sdk", "ro.build.tags", "ro.build.type"};
                 for (String p : props) {
-                    sb.append("  ").append(p).append(" = ")
-                      .append(sh("getprop " + p).trim()).append('\n');
+                    sb.append("  ").append(p).append(" = ").append(sh("getprop " + p).trim()).append('\n');
                 }
-
                 final String s = sb.toString();
                 ui.post(new Runnable() {
                     public void run() { append(s); }
@@ -239,34 +248,13 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-    /**
-     * Appends one NAME=VALUE line to the module's user-override file.
-     * The module applies it on the next boot, through its guarded,
-     * verify-after-write path. No direct property writes from here on purpose.
-     */
-    private void addOverride() {
-        final String n = name.getText().toString().trim();
-        final String v = value.getText().toString().trim();
-        if (n.isEmpty() || v.isEmpty()) {
-            append("need both a name and a value");
-            return;
-        }
-        if (!n.matches("[a-zA-Z0-9_.\\-]+")) {
-            append("invalid property name");
-            return;
-        }
+    private void refreshStatus() {
         new Thread(new Runnable() {
             public void run() {
-                String cmd = "mkdir -p " + MOD + "/state >/dev/null 2>&1; "
-                        + "printf '%s\\n' '" + n + "=" + v + "' >> " + MOD + "/state/extra.prop; "
-                        + "cat " + MOD + "/state/extra.prop";
-                final String res = sh(cmd);
+                final String st = sh("sh " + MOD + "/kai status 2>&1");
                 ui.post(new Runnable() {
                     public void run() {
-                        append("override queued (applies next boot):");
-                        append(res);
-                        name.setText("");
-                        value.setText("");
+                        status.setText(st.replace("\n", "    ").trim());
                     }
                 });
             }

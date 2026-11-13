@@ -1,0 +1,118 @@
+#!/system/bin/sh
+# kai — KaiReborn command line.
+#
+#   kai status                  module state, platform, mode
+#   kai audit                   read-only property audit
+#   kai audit --json            machine readable
+#   kai props                   list current build identity
+#
+#   kai wipegms [--with-gms] [--apply]
+#   kai pkgreset <pkg> [--apply]
+#   kai pkgreinstall <pkg> [--apply]
+#   kai ssaid [--apply]
+#   kai cleaner [<pkg>] [--apply]
+#   kai ifw [--apply]
+#   kai dalvik [--apply]
+#
+#   kai profile list
+#   kai profile create <name>
+#   kai profile show <name>
+#   kai profile apply <name> [--apply]
+#
+#   kai mode <safe|full|audit>
+#
+# Every destructive operation defaults to dry-run. It only acts with --apply,
+# and the module must be in "full" mode first.
+
+MODDIR="${0%/*}"
+[ -d "$MODDIR" ] && [ -f "$MODDIR/common.sh" ] || MODDIR="/data/adb/modules/kaireborn"
+export MODDIR
+
+. "$MODDIR/common.sh"
+. "$MODDIR/guard.sh" 2>/dev/null
+. "$MODDIR/scripts/ops.sh" 2>/dev/null
+. "$MODDIR/scripts/profile.sh" 2>/dev/null
+
+kr_init_dirs
+
+APPLY=0
+ARGS=""
+for a in "$@"; do
+  case "$a" in
+    --apply) APPLY=1 ;;
+    *) ARGS="$ARGS $a" ;;
+  esac
+done
+set -- $ARGS
+
+cmd="$1"; [ $# -gt 0 ] && shift
+MODE="plan"; [ "$APPLY" = "1" ] && MODE="apply"
+
+require_full() {
+  [ "$MODE" = "apply" ] || return 0
+  if [ "$(kr_mode)" != "full" ]; then
+    echo "refusing: module mode is '$(kr_mode)', not 'full'."
+    echo "run: kai mode full   (then reboot or re-run)"
+    exit 1
+  fi
+}
+
+case "$cmd" in
+  status)
+    echo "platform : $(kr_root_impl)"
+    echo "mode     : $(kr_mode)"
+    echo "resetprop: $(kr_resetprop 2>/dev/null || echo none)"
+    echo "disabled : $([ -f "$MODDIR/disable" ] && echo yes || echo no)"
+    echo "boots    : $(cat "$KR_STATE/boot_count" 2>/dev/null || echo 0) incomplete since last ok"
+    echo "log      : $KR_LOG/boot.log"
+    ;;
+  audit)
+    if [ "$1" = "--json" ]; then sh "$MODDIR/audit.sh" --json; else sh "$MODDIR/audit.sh"; fi
+    ;;
+  props)
+    for p in ro.product.manufacturer ro.product.model ro.product.brand \
+             ro.product.device ro.product.name ro.build.fingerprint \
+             ro.build.description ro.build.version.release ro.build.version.sdk \
+             ro.build.tags ro.build.type; do
+      printf '%-34s %s\n' "$p" "$(kr_get "$p")"
+    done
+    ;;
+  mode)
+    case "$1" in
+      safe|full|audit) echo "$1" > "$KR_MODE_FILE"; kr_log "mode -> $1"; echo "mode: $1" ;;
+      *) echo "usage: kai mode <safe|full|audit>"; cat "$KR_MODE_FILE" 2>/dev/null ;;
+    esac
+    ;;
+  wipegms)
+    require_full
+    kr_op_wipegms "$MODE" "$@"
+    ;;
+  pkgreset|pkgreinstall|cleaner)
+    require_full
+    kr_op_$cmd "$MODE" "$1"
+    ;;
+  ssaid|ifw|dalvik)
+    require_full
+    kr_op_$cmd "$MODE"
+    ;;
+  profile)
+    sub="$1"; shift
+    case "$sub" in
+      list)   kr_profile_list ;;
+      show)   kr_profile_show "$1" ;;
+      create) kr_profile_create "$1" ;;
+      apply)
+        require_full
+        kr_profile_apply "$1" "$MODE"
+        ;;
+      *) echo "usage: kai profile <list|create|show|apply>" ;;
+    esac
+    ;;
+  ""|help|-h|--help)
+    sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
+    ;;
+  *)
+    echo "unknown command: $cmd"; echo "run: kai help"
+    exit 1
+    ;;
+esac

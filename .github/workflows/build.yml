@@ -5,6 +5,11 @@ on:
     branches: [main]
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version name, e.g. 2.0.0'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -21,43 +26,55 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # The runner image already ships a full Android SDK with build-tools and
-      # a platform. Do NOT use android-actions/setup-android@v3: it fails with
-      # "Failed to find package 'tools'", which is no longer published.
-      - name: Locate Android SDK
+      # Do NOT add android-actions/setup-android: it fails on the current
+      # runner image with "Failed to find package 'tools'", which is no longer
+      # published. The image ships a working SDK; we only have to find it.
+      - name: Resolve Android SDK
         run: |
+          set -e
           SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
           echo "SDK=$SDK" >> "$GITHUB_ENV"
-          echo "ANDROID_JAR=$SDK/platforms/android-35/android.jar" >> "$GITHUB_ENV"
-          # aapt2 needs the platform *resources*. The SDK's android.jar has
-          # stubs only, so link against the platform's own resource apk.
-          if [ -f "$SDK/platforms/android-35/framework-res.apk" ]; then
-            echo "FRAMEWORK_RES=$SDK/platforms/android-35/framework-res.apk" >> "$GITHUB_ENV"
-          else
-            echo "! no framework-res.apk for android-35, extracting from device-independent source"
-            exit 1
-          fi
-          PATH="$SDK/build-tools/35.0.0:$PATH" >> "$GITHUB_ENV"
-          echo "$SDK/build-tools/35.0.0" >> "$GITHUB_PATH"
           ls "$SDK/platforms" "$SDK/build-tools"
-          test -f "$ANDROID_JAR" || { echo "missing android.jar"; exit 1; }
+          BT="$(ls -d "$SDK"/build-tools/*/ | sort -V | tail -1)"
+          PLAT="$(ls -d "$SDK"/platforms/android-*/ | sort -V | tail -1)"
+          echo "BT=$BT"; echo "PLAT=$PLAT"
+          echo "$BT" >> "$GITHUB_PATH"
+          echo "ANDROID_JAR=${PLAT}android.jar" >> "$GITHUB_ENV"
+          # aapt2 needs platform *resources*. On the runner image the platform
+          # directory carries them; if it does not, the script falls back.
+          if [ -f "${PLAT}framework-res.apk" ]; then
+            echo "FRAMEWORK_RES=${PLAT}framework-res.apk" >> "$GITHUB_ENV"
+          fi
+          test -f "${PLAT}android.jar"
+          "${BT}aapt2" version
 
       - name: Build APK
-        run: bash tools/build-apk.sh
+        run: |
+          bash tools/build-apk.sh
+        env:
+          VERSION_NAME: ${{ github.event.inputs.version || '2.0.0' }}
+          VERSION_CODE: '2'
 
       - name: Build module zip
         run: bash tools/build-module.sh
 
-      - name: Verify outputs
+      - name: Verify
         run: |
           set -e
-          apksigner verify --print-certs dist/KaiReborn-1.0.0.apk
-          unzip -l dist/KaiReborn-v1.0.0.zip
-          # shell syntax under bash AND, when present, busybox ash
-          for f in module/*.sh; do bash -n "$f"; done
-          # sanity: the dex really contains our activity
-          unzip -p dist/KaiReborn-1.0.0.apk classes.dex | head -c 4 | od -An -tx1
-          unzip -p dist/KaiReborn-1.0.0.apk classes.dex | strings | grep -q 'com/kaireborn/audit/MainActivity'
+          echo "── signature ──"
+          apksigner verify --print-certs dist/KaiReborn-2.0.0.apk | head -4
+          echo "── dex really contains our activity ──"
+          unzip -p dist/KaiReborn-2.0.0.apk classes.dex | head -c 4 | od -An -tx1
+          unzip -p dist/KaiReborn-2.0.0.apk classes.dex | strings | grep -q 'com/kaireborn/audit/MainActivity'
+          echo "  ok"
+          echo "── module zip ──"
+          unzip -l dist/KaiReborn-v2.0.0.zip
+          echo "── shell syntax ──"
+          for f in module/*.sh module/kai module/scripts/*.sh; do
+            bash -n "$f"
+            if command -v busybox >/dev/null; then busybox ash -n "$f"; fi
+            echo "  ok $f"
+          done
 
       - uses: actions/upload-artifact@v4
         with:

@@ -75,10 +75,13 @@ set_perm "$MODPATH/guard.sh" 0 0 0755
 set_perm "$MODPATH/common.sh" 0 0 0755
 set_perm "$MODPATH/audit.sh" 0 0 0755
 set_perm "$MODPATH/action.sh" 0 0 0755
+set_perm "$MODPATH/kai" 0 0 0755
+set_perm_recursive "$MODPATH/scripts" 0 0 0755 0755
 
 mkdir -p "$MODPATH/state" "$MODPATH/logs" 2>/dev/null
 echo "safe" > "$MODPATH/state/mode"
 chmod 0755 "$MODPATH/state"
 
 ui_print "- Installed. No sepolicy.rule shipped on purpose."
-ui_print "- Audit any time: sh $MODPATH/audit.sh"
+ui_print "- CLI: sh $MODPATH/kai help"
+ui_print "- Default mode is 'safe'. Writes need 'kai mode full'."
