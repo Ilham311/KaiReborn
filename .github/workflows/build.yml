@@ -21,38 +21,55 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install build-tools
-        run: sdkmanager "build-tools;35.0.0" "platforms;android-35" >/dev/null
+      # The runner image already ships a full Android SDK with build-tools and
+      # a platform. Do NOT use android-actions/setup-android@v3: it fails with
+      # "Failed to find package 'tools'", which is no longer published.
+      - name: Locate Android SDK
+        run: |
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "SDK=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_JAR=$SDK/platforms/android-35/android.jar" >> "$GITHUB_ENV"
+          # aapt2 needs the platform *resources*. The SDK's android.jar has
+          # stubs only, so link against the platform's own resource apk.
+          if [ -f "$SDK/platforms/android-35/framework-res.apk" ]; then
+            echo "FRAMEWORK_RES=$SDK/platforms/android-35/framework-res.apk" >> "$GITHUB_ENV"
+          else
+            echo "! no framework-res.apk for android-35, extracting from device-independent source"
+            exit 1
+          fi
+          PATH="$SDK/build-tools/35.0.0:$PATH" >> "$GITHUB_ENV"
+          echo "$SDK/build-tools/35.0.0" >> "$GITHUB_PATH"
+          ls "$SDK/platforms" "$SDK/build-tools"
+          test -f "$ANDROID_JAR" || { echo "missing android.jar"; exit 1; }
 
       - name: Build APK
-        run: |
-          export ANDROID_JAR="$ANDROID_HOME/platforms/android-35/android.jar"
-          export FRAMEWORK_RES="$ANDROID_HOME/platforms/android-35/android.jar"
-          # CI links against the platform jar plus a stub resource set; use the
-          # SDK's aapt2, which ships with Android 15 framework resources.
-          bash tools/build-apk.sh
+        run: bash tools/build-apk.sh
 
       - name: Build module zip
         run: bash tools/build-module.sh
 
       - name: Verify outputs
         run: |
+          set -e
           apksigner verify --print-certs dist/KaiReborn-1.0.0.apk
           unzip -l dist/KaiReborn-v1.0.0.zip
-          for f in module/*.sh; do
-            bash -n "$f" || { echo "syntax error: $f"; exit 1; }
-          done
+          # shell syntax under bash AND, when present, busybox ash
+          for f in module/*.sh; do bash -n "$f"; done
+          # sanity: the dex really contains our activity
+          unzip -p dist/KaiReborn-1.0.0.apk classes.dex | head -c 4 | od -An -tx1
+          unzip -p dist/KaiReborn-1.0.0.apk classes.dex | strings | grep -q 'com/kaireborn/audit/MainActivity'
 
       - uses: actions/upload-artifact@v4
         with:
           name: kaiReborn
-          path: dist/*
+          path: |
+            dist/*.apk
+            dist/*.zip
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          files: |
+            dist/*.apk
+            dist/*.zip

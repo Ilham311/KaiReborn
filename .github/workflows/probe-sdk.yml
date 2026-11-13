@@ -1,0 +1,28 @@
+name: probe-sdk
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect Android SDK
+        run: |
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "SDK=$SDK"
+          echo "--- platforms ---"
+          ls "$SDK/platforms" 2>&1
+          echo "--- contents of newest platform ---"
+          P=$(ls -d "$SDK"/platforms/android-* 2>/dev/null | sort -V | tail -1)
+          echo "P=$P"
+          ls -la "$P" 2>&1
+          echo "--- framework-res anywhere? ---"
+          find "$SDK" -name "framework-res.apk" -print 2>/dev/null | head
+          echo "--- build-tools ---"
+          ls "$SDK/build-tools" 2>&1
+          echo "--- aapt2 ---"
+          A=$(ls -d "$SDK"/build-tools/*/ 2>/dev/null | sort -V | tail -1)
+          "$A/aapt2" version 2>&1
+          echo "--- does android.jar carry resources.arsc? ---"
+          unzip -l "$P/android.jar" 2>/dev/null | grep -c "resources.arsc"
+          echo "--- javac/d8/zipalign ---"
+          java -version 2>&1 | head -1
+          ls "$A" | grep -E '^(d8|zipalign|apksigner)$'

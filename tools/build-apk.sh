@@ -9,8 +9,9 @@ OUT="$ROOT/dist"
 BUILD="$ROOT/.build"
 
 AJ="${ANDROID_JAR:-/data/data/com.termux/files/home/.gradle/caches/8.13/transforms/9007a5e1e76a60e6cc3cc9fce8b0217d/transformed/android.jar}"
-# aapt2 needs the platform *resources*, not just the stubs jar. The device's
-# own framework-res.apk is world-readable, so we link against that.
+# aapt2 needs the platform *resources*, not just the stubs jar. On device we
+# borrow /system/framework/framework-res.apk; in CI the SDK ships the matching
+# framework-res.apk inside the platform directory.
 FRAMEWORK_RES="${FRAMEWORK_RES:-/system/framework/framework-res.apk}"
 
 [ -f "$AJ" ] || { echo "android.jar not found; set ANDROID_JAR"; exit 1; }
