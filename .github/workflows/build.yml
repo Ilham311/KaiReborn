@@ -1,0 +1,58 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install build-tools
+        run: sdkmanager "build-tools;35.0.0" "platforms;android-35" >/dev/null
+
+      - name: Build APK
+        run: |
+          export ANDROID_JAR="$ANDROID_HOME/platforms/android-35/android.jar"
+          export FRAMEWORK_RES="$ANDROID_HOME/platforms/android-35/android.jar"
+          # CI links against the platform jar plus a stub resource set; use the
+          # SDK's aapt2, which ships with Android 15 framework resources.
+          bash tools/build-apk.sh
+
+      - name: Build module zip
+        run: bash tools/build-module.sh
+
+      - name: Verify outputs
+        run: |
+          apksigner verify --print-certs dist/KaiReborn-1.0.0.apk
+          unzip -l dist/KaiReborn-v1.0.0.zip
+          for f in module/*.sh; do
+            bash -n "$f" || { echo "syntax error: $f"; exit 1; }
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kaiReborn
+          path: dist/*
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*

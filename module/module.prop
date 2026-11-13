@@ -1,0 +1,6 @@
+id=kaireborn
+name=KaiReborn
+version=v1.0.0
+versionCode=1
+author=Ilham311
+description=[Boot] Sensitive-prop guard + audit log. No destructive ops, no SELinux deny, no /data remount. Drop-in compatible with legacy xkatrina_snstv_prps writes.

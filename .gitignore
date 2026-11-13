@@ -1,0 +1,7 @@
+# scratch
+.build/
+.test/
+keys/
+*.apk.idsig
+
+# outputs are committed to dist/ on purpose so the repo is usable without CI
